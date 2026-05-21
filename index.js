@@ -5,6 +5,67 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 
 const app = express();
+
+// ✅ IMPORTANT: Webhook endpoint needs raw body
+app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  // ⚠️ TEMPORARY: Skip verification if secret not configured
+  if (!endpointSecret || endpointSecret === 'whsec_your_webhook_secret_here') {
+    console.log('⚠️ Webhook secret not configured - skipping verification');
+    console.log('📦 Webhook received (unverified)');
+    return res.json({received: true, warning: 'Webhook secret not configured'});
+  }
+
+  let event;
+
+  try {
+    // Verify webhook signature
+    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+  } catch (err) {
+    console.error('⚠️ Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  console.log('✅ Webhook Event Received:', event.type);
+
+  switch (event.type) {
+    case 'payment_intent.succeeded':
+      const paymentIntent = event.data.object;
+      console.log('💰 Payment succeeded:', paymentIntent.id);
+      console.log('   Amount:', paymentIntent.amount / 100, paymentIntent.currency);
+      console.log('   Metadata:', paymentIntent.metadata);
+      // Here you can update your database, send confirmation emails, etc.
+      break;
+
+    case 'payment_intent.payment_failed':
+      const failedPayment = event.data.object;
+      console.log('❌ Payment failed:', failedPayment.id);
+      console.log('   Error:', failedPayment.last_payment_error?.message);
+      break;
+
+    case 'charge.refunded':
+      const refund = event.data.object;
+      console.log('💸 Refund processed:', refund.id);
+      console.log('   Amount:', refund.amount_refunded / 100, refund.currency);
+      break;
+
+    case 'payment_intent.canceled':
+      const canceledPayment = event.data.object;
+      console.log('🚫 Payment canceled:', canceledPayment.id);
+      break;
+
+    default:
+      console.log(`Unhandled event type: ${event.type}`);
+  }
+
+  // Return a 200 response to acknowledge receipt of the event
+  res.json({received: true});
+});
+
+// Regular endpoints need JSON parsing
 app.use(cors());
 app.use(express.json());
 
